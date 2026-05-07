@@ -1,0 +1,51 @@
+name: Vision Schedulers
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"   # كل 15 دقيقة — cart abandonment
+    - cron: "0 */6 * * *"    # كل 6 ساعات — feedback
+  workflow_dispatch:           # تشغيل يدوي من GitHub
+
+jobs:
+
+  cart-abandonment:
+    runs-on: ubuntu-latest
+    if: github.event.schedule == '*/15 * * * *' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+      - run: npm install
+      - run: node scripts/runCart.js
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          WHATSAPP_PROVIDER: ultramsg
+          WHATSAPP_INSTANCE_ID: ${{ secrets.WHATSAPP_INSTANCE_ID }}
+          WHATSAPP_TOKEN: ${{ secrets.WHATSAPP_TOKEN }}
+          WHATSAPP_API_URL: https://api.ultramsg.com
+          PRODUCT_NAME: Vision
+          COMMUNITY_INVITE_LINK: https://chat.whatsapp.com/EakoWrfFC8n9SIDMkAETRm
+          CART_ABANDONMENT_HOURS: "1"
+          LOG_LEVEL: info
+
+  feedback:
+    runs-on: ubuntu-latest
+    if: github.event.schedule == '0 */6 * * *' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+      - run: npm install
+      - run: node scripts/runFeedback.js
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          WHATSAPP_PROVIDER: ultramsg
+          WHATSAPP_INSTANCE_ID: ${{ secrets.WHATSAPP_INSTANCE_ID }}
+          WHATSAPP_TOKEN: ${{ secrets.WHATSAPP_TOKEN }}
+          WHATSAPP_API_URL: https://api.ultramsg.com
+          PRODUCT_NAME: Vision
+          COMMUNITY_INVITE_LINK: https://chat.whatsapp.com/EakoWrfFC8n9SIDMkAETRm
+          FEEDBACK_DELAY_DAYS: "2"
+          LOG_LEVEL: info

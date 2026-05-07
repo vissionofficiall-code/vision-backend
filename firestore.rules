@@ -1,0 +1,30 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── leads collection ────────────────────────────────────
+    // Only Firebase Functions (admin SDK) can read/write leads.
+    // No client-side access allowed.
+    match /leads/{phone} {
+      allow read, write: if false;
+    }
+
+    // ── events collection ────────────────────────────────────
+    // Audit log — admin only, no client access.
+    match /events/{eventId} {
+      allow read, write: if false;
+    }
+
+    // ── analytics_snapshots ──────────────────────────────────
+    // Admin only.
+    match /analytics_snapshots/{date} {
+      allow read, write: if false;
+    }
+
+    // ── Deny all other access ────────────────────────────────
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

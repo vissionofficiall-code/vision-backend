@@ -63,19 +63,23 @@ app.post("*", verifyNazmlySignature, async (req, res) => {
     logger.info("Webhook received", { requestId, body: req.body });
 
     // ── 1. Validate payload structure ─────────────────────────
-    if (!req.body || !req.body.event) {
-      logger.warn("Invalid webhook payload — missing event field", { requestId, body: req.body });
+    // Nazmly sends: { type: "store.order.created", data: { customer: {...}, ... } }
+    if (!req.body || (!req.body.type && !req.body.event)) {
+      logger.warn("Invalid webhook payload", { requestId, body: req.body });
       return res.status(400).json({ error: "Missing event field" });
     }
 
-    const event = req.body.event;
+    const event = req.body.type || req.body.event;
+    const data  = req.body.data || req.body;
 
-    // ── Nazmly field mapping (handles multiple payload formats) ─
-    // Nazmly may nest data under "data", "order", or flatten it at root level.
-    const raw = req.body.data || req.body.order || req.body;
+    // ── Nazmly actual payload structure ───────────────────────
+    // data.customer = { first_name, last_name, phone, email }
+    // data.charge_amount = { total_amount, currency }
+    const customer = data.customer || {};
+    const charge   = data.charge_amount || {};
 
     // ── 2. Validate & normalize phone ─────────────────────────
-    const rawPhone = raw.phone || raw.customer_phone || raw.mobile || "";
+    const rawPhone = customer.phone || data.phone || "";
     const phoneResult = validatePhone(rawPhone);
     if (!phoneResult.valid) {
       logger.warn("Invalid phone number in webhook", { phone: rawPhone, requestId });
@@ -85,16 +89,17 @@ app.post("*", verifyNazmlySignature, async (req, res) => {
     const phone = phoneResult.normalized;
 
     // ── 3. Build clean lead object ────────────────────────────
+    const fullName = [customer.first_name, customer.last_name].filter(Boolean).join(" ");
     const lead = {
       phone,
-      name: sanitizeString(raw.name || raw.customer_name || raw.full_name || ""),
-      email: sanitizeString(raw.email || raw.customer_email || ""),
-      product: sanitizeString(raw.product || raw.product_name || "Vision"),
-      orderId: sanitizeString(raw.order_id || raw.id || raw.reference || ""),
-      amount: raw.amount || raw.total || raw.price || null,
-      currency: raw.currency || "SAR",
-      source: sanitizeString(raw.utm_source || raw.source || "direct"),
-      analytics: analyticsService.extractAnalyticsData(raw),
+      name:     sanitizeString(fullName || customer.name || data.name || ""),
+      email:    sanitizeString(customer.email || data.email || ""),
+      product:  "Vision",
+      orderId:  sanitizeString(data.id || data.order_id || ""),
+      amount:   charge.total_amount || charge.amount || data.amount || null,
+      currency: charge.currency || data.currency || "SAR",
+      source:   sanitizeString(data.utm_source || data.source || "direct"),
+      analytics: analyticsService.extractAnalyticsData(data),
     };
 
     // ── 4. Route by event type ────────────────────────────────

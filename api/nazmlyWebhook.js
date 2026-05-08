@@ -1,6 +1,5 @@
 const admin = require("firebase-admin");
 
-// Initialize Firebase Admin
 if (!admin.apps.length) {
   try {
     const sa = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT || "{}");
@@ -11,61 +10,71 @@ if (!admin.apps.length) {
   }
 }
 
-// Disable signature verification in Vercel (rawBody stream not available)
-process.env.NAZMLY_VERIFY_SIGNATURE = "false";
-
-const express = require("express");
 const { validatePhone, sanitizeString } = require("../functions/src/utils/validators");
-const { createLogger } = require("../functions/src/utils/logger");
 const firestoreService = require("../functions/src/services/firestoreService");
-const whatsappService = require("../functions/src/services/whatsappService");
+const whatsappService  = require("../functions/src/services/whatsappService");
 const analyticsService = require("../functions/src/services/analyticsService");
 
-const logger = createLogger("Webhook");
-const app = express();
+const CHECKOUT = ["store.order.created", "store.order.confirmed", "store.customer.created"];
+const SUCCESS  = ["store.order.payment_succeeded"];
 
-// Fix: Vercel pre-parses the body before Express sees it.
-// Setting req._body=true tells body-parser to skip re-parsing the empty stream.
-app.use((req, res, next) => {
-  if (req.body !== undefined) req._body = true;
-  next();
-});
-app.use(express.json());
+// Pure Node.js handler — no Express middleware conflicts with Vercel
+module.exports = async (req, res) => {
+  res.setHeader("Content-Type", "application/json");
 
-const CHECKOUT_EVENTS = ["store.order.created", "store.order.confirmed", "store.customer.created"];
-const SUCCESS_EVENTS  = ["store.order.payment_succeeded"];
-
-app.post("*", async (req, res) => {
+  // ── Parse body (handle all Vercel formats) ──────────────────
+  let body = {};
   try {
-    const body = req.body || {};
-    const event = body.type || body.event;
-    if (!event) return res.status(400).json({ error: "Missing event" });
+    if (req.body && typeof req.body === "object" && !Buffer.isBuffer(req.body)) {
+      body = req.body; // Already parsed by Vercel
+    } else {
+      const raw = await new Promise((resolve, reject) => {
+        let data = "";
+        if (Buffer.isBuffer(req.body)) { resolve(req.body.toString("utf8")); return; }
+        if (typeof req.body === "string") { resolve(req.body); return; }
+        req.setEncoding("utf8");
+        req.on("data", c => { data += c; });
+        req.on("end",  () => resolve(data));
+        req.on("error", reject);
+      });
+      body = raw ? JSON.parse(raw) : {};
+    }
+  } catch (e) {
+    return res.end(JSON.stringify({ error: "Invalid JSON" }));
+  }
 
-    const data     = body.data || body;
-    const customer = data.customer || {};
-    const charge   = data.charge_amount || {};
+  // ── Route ────────────────────────────────────────────────────
+  const event = body.type || body.event;
+  if (!event) return res.end(JSON.stringify({ error: "Missing event" }));
 
-    const rawPhone = customer.phone || data.phone || "";
-    const phoneResult = validatePhone(rawPhone);
-    if (!phoneResult.valid) return res.status(400).json({ error: "Invalid phone" });
+  const data     = body.data || body;
+  const customer = data.customer || {};
+  const charge   = data.charge_amount || {};
 
-    const fullName = [customer.first_name, customer.last_name].filter(Boolean).join(" ");
-    const lead = {
-      phone:    phoneResult.normalized,
-      name:     sanitizeString(fullName || data.name || ""),
-      email:    sanitizeString(customer.email || data.email || ""),
-      product:  "Vision",
-      orderId:  sanitizeString(data.id || data.order_id || ""),
-      amount:   charge.total_amount || data.amount || null,
-      currency: charge.currency || "SAR",
-      source:   sanitizeString(data.utm_source || "direct"),
-      analytics: analyticsService.extractAnalyticsData(data),
-    };
+  const rawPhone   = customer.phone || data.phone || "";
+  const phoneResult = validatePhone(rawPhone);
+  if (!phoneResult.valid) {
+    res.statusCode = 400;
+    return res.end(JSON.stringify({ error: "Invalid phone", received: rawPhone }));
+  }
 
-    if (CHECKOUT_EVENTS.includes(event)) {
+  const fullName = [customer.first_name, customer.last_name].filter(Boolean).join(" ");
+  const lead = {
+    phone:    phoneResult.normalized,
+    name:     sanitizeString(fullName || data.name || ""),
+    email:    sanitizeString(customer.email || data.email || ""),
+    product:  "Vision",
+    orderId:  sanitizeString(data.id || data.order_id || ""),
+    amount:   charge.total_amount || data.amount || null,
+    currency: charge.currency || "SAR",
+    source:   sanitizeString(data.utm_source || "direct"),
+    analytics: analyticsService.extractAnalyticsData(data),
+  };
+
+  try {
+    if (CHECKOUT.includes(event)) {
       await firestoreService.upsertCartLead(lead);
-      logger.info("Cart lead saved", { phone: lead.phone, event });
-    } else if (SUCCESS_EVENTS.includes(event)) {
+    } else if (SUCCESS.includes(event)) {
       await firestoreService.markLeadAsPaid(lead.phone, lead);
       try {
         await whatsappService.sendWelcomeMessage(lead);
@@ -73,15 +82,13 @@ app.post("*", async (req, res) => {
         await new Promise(r => setTimeout(r, 3000));
         await whatsappService.sendCommunityInvite(lead);
       } catch (e) {
-        logger.error("WhatsApp send error", e);
+        console.error("WhatsApp error:", e.message);
       }
     }
-
-    return res.status(200).json({ received: true, event });
+    return res.end(JSON.stringify({ received: true, event }));
   } catch (err) {
-    console.error("Webhook error:", err.message);
-    return res.status(500).json({ error: err.message });
+    console.error("Handler error:", err.message);
+    res.statusCode = 500;
+    return res.end(JSON.stringify({ error: err.message }));
   }
-});
-
-module.exports = app;
+};

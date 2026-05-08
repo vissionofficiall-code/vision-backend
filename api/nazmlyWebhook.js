@@ -23,6 +23,13 @@ const analyticsService = require("../functions/src/services/analyticsService");
 
 const logger = createLogger("Webhook");
 const app = express();
+
+// Fix: Vercel pre-parses the body before Express sees it.
+// Setting req._body=true tells body-parser to skip re-parsing the empty stream.
+app.use((req, res, next) => {
+  if (req.body !== undefined) req._body = true;
+  next();
+});
 app.use(express.json());
 
 const CHECKOUT_EVENTS = ["store.order.created", "store.order.confirmed", "store.customer.created"];

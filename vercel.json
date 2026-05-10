@@ -1,6 +1,7 @@
 {
   "routes": [
     { "src": "/nazmlyWebhook", "dest": "/api/nazmlyWebhook" },
-    { "src": "/health",        "dest": "/api/health" }
+    { "src": "/health",        "dest": "/api/health" },
+    { "src": "/check",         "dest": "/api/check" }
   ]
 }
